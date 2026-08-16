@@ -35,10 +35,12 @@ jobs:
         uses: dtolnay/rust-toolchain@v1
         with:
           toolchain: stable
-          targets: aarch64-linux-android,armv7-linux-androideabi
 
       - name: Ensure Rust Android targets are installed
-        run: rustup target add aarch64-linux-android armv7-linux-androideabi
+        run: |
+          for i in {1..5}; do
+            rustup target add aarch64-linux-android armv7-linux-androideabi && break || sleep 5
+          done
 
       - name: Cache cargo/target
         uses: Swatinem/rust-cache@v2
