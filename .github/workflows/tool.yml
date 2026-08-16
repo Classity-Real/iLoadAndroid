@@ -4,8 +4,6 @@ on:
   push:
     branches: [main]
   pull_request:
-    paths-ignore:
-      - '**'
   workflow_dispatch:
 
 jobs:
@@ -32,9 +30,7 @@ jobs:
           echo "ANDROID_NDK_ROOT=$ANDROID_SDK_ROOT/ndk/27.0.12077973" >> "$GITHUB_ENV"
 
       - name: Set up Rust
-        uses: dtolnay/rust-toolchain@v1
-        with:
-          toolchain: stable
+        uses: dtolnay/rust-toolchain@stable
 
       - name: Ensure Rust Android targets are installed
         run: |
@@ -43,38 +39,4 @@ jobs:
           done
 
       - name: Cache cargo/target
-        uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: rust/isideload-android
-
-      - name: Install cargo-ndk
-        run: cargo install cargo-ndk
-
-      - name: Build with cargo ndk
-        working-directory: rust/isideload-android
-        run: |
-          cargo ndk \
-            -t arm64-v8a \
-            -t armeabi-v7a \
-            -o ../../app/src/main/jniLibs \
-            build --release
-
-      - name: Generate uniffi Kotlin bindings
-        working-directory: rust/isideload-android
-        run: |
-          cargo run --bin uniffi-bindgen -- generate \
-            --library ../../app/src/main/jniLibs/arm64-v8a/libisideload_android.so \
-            --language kotlin \
-            --out-dir ../../app/src/main/java
-
-      - name: Set up Gradle
-        uses: gradle/actions/setup-gradle@v4
-
-      - name: Build debug APK
-        run: ./gradlew assembleDebug
-
-      - name: Upload APK
-        uses: actions/upload-artifact@v4
-        with:
-          name: iLoadAndroid-debug
-          path: app/build/outputs/apk/debug/*.apk
+        uses: Swat
