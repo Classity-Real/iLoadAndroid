@@ -1,0 +1,33 @@
+[package]
+name = "isideload-android"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+name = "isideload_android"
+crate-type = ["cdylib", "staticlib"]
+
+[[bin]]
+name = "uniffi-bindgen"
+path = "src/bin/uniffi-bindgen.rs"
+
+[dependencies]
+# NOTE: verify these feature names against isideload's actual Cargo.toml
+# before building. In the published crate, `idevice` and `keyring` are
+# both listed as *optional* dependencies -- almost certainly gated behind
+# features of the same name (or close to it). We deliberately want BOTH
+# disabled for this crate:
+#   - no `idevice` -> no USB/usbmuxd stack pulled in, auth is pure network
+#   - no `keyring` -> no desktop-keychain backend that won't build for
+#     Android anyway; session storage is handled on the Kotlin side via
+#     Android Keystore / EncryptedSharedPreferences instead
+isideload = { version = "0.3", default-features = false }
+
+uniffi = { version = "0.28", features = ["tokio"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+
+[build-dependencies]
+uniffi = { version = "0.28", features = ["build"] }
