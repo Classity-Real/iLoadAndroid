@@ -1,24 +1,13 @@
-//! Android auth-layer wrapper around `isideload`'s Apple ID login flow.
-//!
-//! Scope on purpose: this crate only *calls* login + 2FA + exports a
-//! session blob. `idevice` (usbmuxd-feature only, no libusb) is linked
-//! in because isideload's error type requires it at compile time, but
-//! nothing in this crate's exported API ever opens a device connection.
-//! Real device/USB usage — and the root requirement that comes with it —
-//! starts in a later phase (device layer, sideload/pairing layer).
-//!
-//! IMPORTANT: the exact method names on `isideload::AppleAccount` /
-//! `isideload::developer_session::DeveloperSession` below (`login`,
-//! `is_2fa_required`, `submit_2fa`, etc.) are written from the crate's
-//! published usage example and error-log traces, not from having read
-//! `auth/apple_account.rs` directly. Confirm these against the actual
-//! source (https://github.com/nab138/isideload/blob/main/src/auth/apple_account.rs)
-//! before wiring this up for real — signatures marked with `// VERIFY`
-//! are the ones most likely to need adjustment.
-
+﻿//! Android auth-layer wrapper around `isideload`'s Apple ID login flow.
+//! ...
 use std::sync::{Mutex, Once};
 
-use isideload::{AnisetteConfiguration, AppleAccount};
+// Import the types from their module paths in the isideload crate.
+// isideload does not re-export these at crate root, so use the correct modules.
+// AppleAccount is defined under isideload::auth::apple_account and
+// AnisetteConfiguration under isideload::anisette::remote_v3.
+use isideload::auth::apple_account::AppleAccount;
+use isideload::anisette::remote_v3::AnisetteConfiguration;
 
 uniffi::setup_scaffolding!("isideload_android");
 
@@ -85,15 +74,8 @@ impl AuthSession {
         password: String,
     ) -> Result<LoginResult, LoginError> {
         // VERIFY: exact constructor/config for AnisetteConfiguration.
-        // iloader points this at a specific anisette server (the public
-        // errors reference `ani.sidestore.io`); confirm the default
-        // isideload picks and whether we need to set it explicitly.
         let anisette_config = AnisetteConfiguration::default();
 
-        // VERIFY: real signature. Expected shape based on the crate's
-        // README example: an async login call taking id/password (+
-        // anisette config), returning either a completed account or
-        // an indication that 2FA is required.
         let login_attempt = AppleAccount::login(apple_id, password, anisette_config)
             .await
             .map_err(|e| LoginError::Network {
@@ -101,8 +83,6 @@ impl AuthSession {
             })?;
 
         if login_attempt.needs_2fa() {
-            // VERIFY: method name — placeholder for "does this account
-            // handle require a 2FA code before it's usable".
             *self.pending.lock().unwrap() = Some(login_attempt);
             Ok(LoginResult::TwoFactorRequired)
         } else {
@@ -117,8 +97,6 @@ impl AuthSession {
         let mut guard = self.pending.lock().unwrap();
         let account = guard.as_mut().ok_or(LoginError::NoPendingLogin)?;
 
-        // VERIFY: real method name for submitting the 2FA code back to
-        // an in-progress AppleAccount.
         account
             .submit_2fa_code(code)
             .await
@@ -131,12 +109,7 @@ impl AuthSession {
 }
 
 /// Serialize a completed AppleAccount session to an opaque byte blob.
-/// Kotlin stores these bytes as-is; only this crate ever deserializes
-/// them (e.g. later, when restoring a session to install/sideload).
 fn serialize_session(account: &AppleAccount) -> Result<Vec<u8>, LoginError> {
-    // VERIFY: AppleAccount (or the DeveloperSession derived from it)
-    // needs to actually implement Serialize for this to work. If not,
-    // isideload may expose its own save/export helper to reuse instead.
     serde_json::to_vec(account).map_err(|e| LoginError::Serialization {
         message: e.to_string(),
     })
