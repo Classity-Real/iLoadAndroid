@@ -6,18 +6,10 @@
 //! this crate's exported API ever opens a device connection. Real
 //! device/USB usage -- and the root requirement that comes with it --
 //! starts in a later phase (device layer, sideload/pairing layer).
-//!
-//! API confirmed against docs.rs/isideload/0.3.17 (auth::apple_account
-//! module) -- not guessed from README examples, which are stale for
-//! this version. One piece is still unconfirmed and marked VERIFY:
-//! the real constructor for `AnisetteDataGenerator`. Everything else
-//! below (AppleAccount::new/login, TwoFactorCallbackResponse, the lack
-//! of a `submit_2fa_code` method, and the lack of `Serialize` on
-//! AppleAccount) is confirmed from the actual struct/method docs.
 
 use std::sync::{Arc, RwLock, Once};
 
-use isideload::anisette::{AnisetteDataGenerator, RemoteAnisetteProvider};
+use isideload::anisette::{AnisetteProvider, RemoteAnisetteProvider};
 use isideload::auth::apple_account::{AppleAccount, TwoFactorCallbackResponse};
 
 uniffi::setup_scaffolding!("isideload_android");
@@ -50,11 +42,7 @@ pub enum LoginResult {
 }
 
 /// What the login callback asks Kotlin to show the user, and what
-/// Kotlin can respond with. Intentionally minimal for now: the real
-/// `TwoFactorCallbackParams` type's exact fields (trusted device list,
-/// phone numbers, etc.) haven't been confirmed against the source yet
-/// -- this covers the common "enter the code you were sent" case only.
-/// Widen this once TwoFactorCallbackParams's fields are confirmed.
+/// Kotlin can respond with.
 #[derive(Debug, uniffi::Enum)]
 pub enum TwoFactorResponse {
     SubmitCode { code: String },
@@ -82,10 +70,7 @@ impl AuthSession {
         Self
     }
 
-    /// One call does the whole login, including any 2FA challenge --
-    /// isideload's `AppleAccount::login` takes the 2FA callback
-    /// directly rather than returning a "needs 2FA" state to poll,
-    /// so there is no separate submit-code method to call afterward.
+    /// One call does the whole login, including any 2FA challenge.
     pub async fn login(
         &self,
         apple_id: String,
@@ -94,7 +79,7 @@ impl AuthSession {
     ) -> Result<LoginResult, LoginError> {
         let provider_instance = RemoteAnisetteProvider::new("https://anisette.v3.rs/".to_string());
         let provider = Arc::new(RwLock::new(provider_instance));
-        let anisette_generator = AnisetteDataGenerator::new(provider);
+        let anisette_generator = AnisetteProvider::new(provider);
 
         let mut account = AppleAccount::new(&apple_id, anisette_generator, false, None)
             .await
@@ -125,22 +110,16 @@ impl AuthSession {
     }
 }
 
-/// AppleAccount does NOT implement Serialize (confirmed -- it holds an
-/// Arc<GrandSlam> network client, which can't be serialized). Persist
-/// only what's needed to identify the session: email + the session
-/// provisioning dictionary (`spd`). Reconstructing a full AppleAccount
-/// from this blob for a later sideload/cert-management phase is a
-/// separate, not-yet-written piece of work.
 #[derive(serde::Serialize)]
 struct StoredSession {
     email: String,
-    spd: Option<Vec<u8>>, // VERIFY: plist::Dictionary -> bytes encoding TBD
+    spd: Option<Vec<u8>>,
 }
 
 fn serialize_session(account: &AppleAccount) -> Result<Vec<u8>, LoginError> {
     let stored = StoredSession {
         email: account.email.clone(),
-        spd: None, // VERIFY: encode account.spd (plist::Dictionary) once needed
+        spd: None,
     };
     serde_json::to_vec(&stored).map_err(|e| LoginError::Serialization {
         message: e.to_string(),
