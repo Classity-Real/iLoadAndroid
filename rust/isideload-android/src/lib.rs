@@ -1,19 +1,30 @@
-﻿//! Android auth-layer wrapper around `isideload`'s Apple ID login flow.
-//! ...
-use std::sync::{Mutex, Once};
+//! Android auth-layer wrapper around `isideload`'s Apple ID login flow.
+//!
+//! Scope on purpose: this crate only *calls* login + exports a session
+//! blob. `idevice` (usbmuxd-feature only, no libusb) is linked in because
+//! isideload's error type requires it at compile time, but nothing in
+//! this crate's exported API ever opens a device connection. Real
+//! device/USB usage -- and the root requirement that comes with it --
+//! starts in a later phase (device layer, sideload/pairing layer).
+//!
+//! API confirmed against docs.rs/isideload/0.3.17 (auth::apple_account
+//! module) -- not guessed from README examples, which are stale for
+//! this version. One piece is still unconfirmed and marked VERIFY:
+//! the real constructor for `AnisetteDataGenerator`. Everything else
+//! below (AppleAccount::new/login, TwoFactorCallbackResponse, the lack
+//! of a `submit_2fa_code` method, and the lack of `Serialize` on
+//! AppleAccount) is confirmed from the actual struct/method docs.
 
-// Import the types from their module paths in the isideload crate.
-// isideload does not re-export these at crate root, so use the correct modules.
-// AppleAccount is defined under isideload::auth::apple_account and
-// AnisetteConfiguration under isideload::anisette::remote_v3.
-use isideload::auth::apple_account::AppleAccount;
-use isideload::anisette::remote_v3::AnisetteConfiguration;
+use std::sync::{Arc, Once};
+
+use isideload::anisette::AnisetteDataGenerator;
+use isideload::auth::apple_account::{AppleAccount, TwoFactorCallbackResponse};
 
 uniffi::setup_scaffolding!("isideload_android");
 
 static INIT: Once = Once::new();
 
-/// Must run exactly once before any login attempt — without it,
+/// Must run exactly once before any login attempt -- without it,
 /// isideload's network errors come back with no useful detail
 /// (per the crate's own docs).
 fn ensure_init() {
@@ -24,93 +35,118 @@ fn ensure_init() {
 
 #[derive(Debug, thiserror::Error, uniffi::Error)]
 pub enum LoginError {
-    #[error("invalid Apple ID or password")]
-    InvalidCredentials,
-    #[error("two-factor code was incorrect")]
-    Invalid2faCode,
-    #[error("no login attempt in progress")]
-    NoPendingLogin,
-    #[error("anisette/network error: {message}")]
-    Network { message: String },
+    #[error("login failed: {message}")]
+    Failed { message: String },
     #[error("session could not be serialized: {message}")]
     Serialization { message: String },
 }
 
 #[derive(Debug, uniffi::Enum)]
 pub enum LoginResult {
-    /// Login complete. `session` is an opaque blob — hand it to Kotlin
+    /// Login complete. `session` is an opaque blob -- hand it to Kotlin
     /// to store via EncryptedSharedPreferences / Android Keystore.
     /// Do not attempt to parse it on the Kotlin side.
     Success { session: Vec<u8> },
-    /// Apple ID + password were accepted, but a 2FA code sent to a
-    /// trusted device is required. Call `submit_2fa` next.
-    TwoFactorRequired,
 }
 
-/// Holds in-progress login state between `login()` and `submit_2fa()`,
-/// since Apple ID auth is a two-step challenge/response flow.
-#[derive(uniffi::Object)]
-pub struct AuthSession {
-    // VERIFY: confirm AppleAccount is actually the right in-progress
-    // handle to hold here, and that it's what needs the 2FA code
-    // submitted back to it (vs. a separate intermediate type).
-    pending: Mutex<Option<AppleAccount>>,
+/// What the login callback asks Kotlin to show the user, and what
+/// Kotlin can respond with. Intentionally minimal for now: the real
+/// `TwoFactorCallbackParams` type's exact fields (trusted device list,
+/// phone numbers, etc.) haven't been confirmed against the source yet
+/// -- this covers the common "enter the code you were sent" case only.
+/// Widen this once TwoFactorCallbackParams's fields are confirmed.
+#[derive(Debug, uniffi::Enum)]
+pub enum TwoFactorResponse {
+    SubmitCode { code: String },
+    ResendCode,
+    Abort,
 }
+
+/// Implemented on the Kotlin side. `login()` below calls this mid-flow
+/// if Apple requires a 2FA code -- Kotlin shows the entry screen and
+/// suspends until the user responds.
+#[uniffi::export(with_foreign)]
+#[async_trait::async_trait]
+pub trait TwoFactorHandler: Send + Sync {
+    async fn on_two_factor_required(&self) -> TwoFactorResponse;
+}
+
+#[derive(uniffi::Object)]
+pub struct AuthSession;
 
 #[uniffi::export(async_runtime = "tokio")]
 impl AuthSession {
     #[uniffi::constructor]
     pub fn new() -> Self {
         ensure_init();
-        Self {
-            pending: Mutex::new(None),
-        }
+        Self
     }
 
-    /// Start (or restart) a login attempt with an Apple ID + password.
+    /// One call does the whole login, including any 2FA challenge --
+    /// isideload's `AppleAccount::login` takes the 2FA callback
+    /// directly rather than returning a "needs 2FA" state to poll,
+    /// so there is no separate submit-code method to call afterward.
     pub async fn login(
         &self,
         apple_id: String,
         password: String,
+        handler: Arc<dyn TwoFactorHandler>,
     ) -> Result<LoginResult, LoginError> {
-        // VERIFY: exact constructor/config for AnisetteConfiguration.
-        let anisette_config = AnisetteConfiguration::default();
+        // VERIFY: real constructor for AnisetteDataGenerator. Likely
+        // takes an anisette server URL (iloader/isideload default to
+        // a hosted server -- errors in isideload's issue tracker
+        // reference `ani.sidestore.io`) but the exact builder/method
+        // name needs confirming against isideload::anisette source
+        // before this compiles.
+        let anisette_generator = AnisetteDataGenerator::default();
 
-        let login_attempt = AppleAccount::login(apple_id, password, anisette_config)
+        let mut account = AppleAccount::new(&apple_id, anisette_generator, false, None)
             .await
-            .map_err(|e| LoginError::Network {
+            .map_err(|e| LoginError::Failed {
                 message: e.to_string(),
             })?;
 
-        if login_attempt.needs_2fa() {
-            *self.pending.lock().unwrap() = Some(login_attempt);
-            Ok(LoginResult::TwoFactorRequired)
-        } else {
-            let bytes = serialize_session(&login_attempt)?;
-            Ok(LoginResult::Success { session: bytes })
-        }
-    }
-
-    /// Submit the 6-digit code shown on a trusted device to complete
-    /// a login that returned `TwoFactorRequired`.
-    pub async fn submit_2fa(&self, code: String) -> Result<LoginResult, LoginError> {
-        let mut guard = self.pending.lock().unwrap();
-        let account = guard.as_mut().ok_or(LoginError::NoPendingLogin)?;
-
         account
-            .submit_2fa_code(code)
+            .login(&password, move |_params| {
+                let handler = handler.clone();
+                async move {
+                    Ok(match handler.on_two_factor_required().await {
+                        TwoFactorResponse::SubmitCode { code } => {
+                            TwoFactorCallbackResponse::SubmitCode(code)
+                        }
+                        TwoFactorResponse::ResendCode => TwoFactorCallbackResponse::ResendCode,
+                        TwoFactorResponse::Abort => TwoFactorCallbackResponse::Abort,
+                    })
+                }
+            })
             .await
-            .map_err(|_| LoginError::Invalid2faCode)?;
+            .map_err(|e| LoginError::Failed {
+                message: e.to_string(),
+            })?;
 
-        let bytes = serialize_session(account)?;
-        *guard = None;
-        Ok(LoginResult::Success { session: bytes })
+        let session = serialize_session(&account)?;
+        Ok(LoginResult::Success { session })
     }
 }
 
-/// Serialize a completed AppleAccount session to an opaque byte blob.
+/// AppleAccount does NOT implement Serialize (confirmed -- it holds an
+/// Arc<GrandSlam> network client, which can't be serialized). Persist
+/// only what's needed to identify the session: email + the session
+/// provisioning dictionary (`spd`). Reconstructing a full AppleAccount
+/// from this blob for a later sideload/cert-management phase is a
+/// separate, not-yet-written piece of work.
+#[derive(serde::Serialize)]
+struct StoredSession {
+    email: String,
+    spd: Option<Vec<u8>>, // VERIFY: plist::Dictionary -> bytes encoding TBD
+}
+
 fn serialize_session(account: &AppleAccount) -> Result<Vec<u8>, LoginError> {
-    serde_json::to_vec(account).map_err(|e| LoginError::Serialization {
+    let stored = StoredSession {
+        email: account.email.clone(),
+        spd: None, // VERIFY: encode account.spd (plist::Dictionary) once needed
+    };
+    serde_json::to_vec(&stored).map_err(|e| LoginError::Serialization {
         message: e.to_string(),
     })
 }
