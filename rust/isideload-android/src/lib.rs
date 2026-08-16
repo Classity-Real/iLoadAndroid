@@ -110,7 +110,7 @@ impl AuthSession {
         &self,
         apple_id: String,
         password: String,
-        config_dir: String,
+        _config_dir: String, // unused until SideloadingStorage impl is known -- see below
         handler: Arc<dyn TwoFactorHandler>,
     ) -> Result<LoginResult, LoginError> {
         // VERIFY: constructor argument names/order are inferred from
@@ -119,11 +119,20 @@ impl AuthSession {
         // device serial/identifier string. No real device exists yet
         // at this auth-only stage, so this is a placeholder per-install
         // identifier.
+        //
+        // Second arg is confirmed NOT a path -- it's Box<dyn
+        // SideloadingStorage>, a storage abstraction (compiler error).
+        // That trait isn't in the anisette module the debug CI step
+        // greps, so this won't compile until it's found -- see the
+        // widened debug step in build.yml.
         let provider = RemoteV3AnisetteProvider::new(
-            DEFAULT_ANISETTE_SERVER.to_string(),
-            config_dir.into(),
+            DEFAULT_ANISETTE_SERVER,
+            todo!("SideloadingStorage impl -- see debug step output"),
             "isideload-android-placeholder".to_string(),
-        );
+        )
+        .map_err(|e| LoginError::Failed {
+            message: e.to_string(),
+        })?;
         let anisette_generator =
             AnisetteDataGenerator::new(Arc::new(RwLock::new(provider)) as Arc<RwLock<dyn AnisetteProvider + Send + Sync>>);
 
