@@ -1,5 +1,7 @@
-fn main() {
-    uniffi::uniffi_bindgen_main();
+﻿fn main() {
+    // UniFFI 0.27+ exposes the CLI entrypoint as `uniffi::cli::main()`.
+    // The older `uniffi_bindgen_main()` symbol no longer exists.
+    uniffi::cli::main();
 }
 
 // Usage, once the crate is built for the host (or run through cargo-ndk):
