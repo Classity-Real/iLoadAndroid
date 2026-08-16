@@ -12,16 +12,28 @@ name = "uniffi-bindgen"
 path = "src/bin/uniffi-bindgen.rs"
 
 [dependencies]
-# NOTE: verify these feature names against isideload's actual Cargo.toml
-# before building. In the published crate, `idevice` and `keyring` are
-# both listed as *optional* dependencies -- almost certainly gated behind
-# features of the same name (or close to it). We deliberately want BOTH
-# disabled for this crate:
-#   - no `idevice` -> no USB/usbmuxd stack pulled in, auth is pure network
-#   - no `keyring` -> no desktop-keychain backend that won't build for
-#     Android anyway; session storage is handled on the Kotlin side via
-#     Android Keystore / EncryptedSharedPreferences instead
-isideload = { version = "0.3", default-features = false }
+# CORRECTED (was wrong): `idevice` is not cleanly feature-gated inside
+# isideload -- its root lib.rs references `idevice::IdeviceError`
+# unconditionally, so `default-features = false` on isideload alone
+# breaks the build (confirmed by CI: E0432/E0433 for both `idevice` and
+# `tokio-tungstenite`, which the anisette remote_v3 websocket path needs
+# even for a pure login flow).
+#
+# Fix, matching isideload's own documented usage pattern: keep isideload
+# on its normal defaults, and add `idevice` explicitly ourselves with
+# ONLY the `usbmuxd` feature. This still links idevice's socket-protocol
+# code at compile time (unavoidable -- it's baked into isideload's error
+# type) but never touches raw USB/libusb at runtime, so the auth-only
+# scope holds: no root needed, no device required to log in.
+#
+# `keyring` is still worth disabling if isideload exposes a feature for
+# it -- confirm the exact flag name before assuming; don't repeat the
+# same mistake by guessing again. Until confirmed, leaving isideload's
+# defaults on (which may include keyring) rather than risk another
+# silent-breakage guess; its desktop-keychain code just won't be called
+# from this crate either way.
+isideload = "0.3"
+idevice = { version = "0.1.61", default-features = false, features = ["usbmuxd", "ring"] }
 
 uniffi = { version = "0.28", features = ["tokio"] }
 tokio = { version = "1", features = ["rt-multi-thread", "macros"] }

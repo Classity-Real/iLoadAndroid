@@ -1,8 +1,11 @@
 //! Android auth-layer wrapper around `isideload`'s Apple ID login flow.
 //!
-//! Scope on purpose: this crate only covers login + 2FA + exporting a
-//! session blob. It does not touch idevice/usbmuxd or keyring — those
-//! come in later phases (USB/device layer, sideload/pairing layer).
+//! Scope on purpose: this crate only *calls* login + 2FA + exports a
+//! session blob. `idevice` (usbmuxd-feature only, no libusb) is linked
+//! in because isideload's error type requires it at compile time, but
+//! nothing in this crate's exported API ever opens a device connection.
+//! Real device/USB usage — and the root requirement that comes with it —
+//! starts in a later phase (device layer, sideload/pairing layer).
 //!
 //! IMPORTANT: the exact method names on `isideload::AppleAccount` /
 //! `isideload::developer_session::DeveloperSession` below (`login`,
