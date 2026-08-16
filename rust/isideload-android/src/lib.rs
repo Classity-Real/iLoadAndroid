@@ -15,9 +15,9 @@
 //! of a `submit_2fa_code` method, and the lack of `Serialize` on
 //! AppleAccount) is confirmed from the actual struct/method docs.
 
-use std::sync::{Arc, Once};
+use std::sync::{Arc, RwLock, Once};
 
-use isideload::anisette::AnisetteDataGenerator;
+use isideload::anisette::{AnisetteDataGenerator, RemoteAnisetteProvider};
 use isideload::auth::apple_account::{AppleAccount, TwoFactorCallbackResponse};
 
 uniffi::setup_scaffolding!("isideload_android");
@@ -92,13 +92,9 @@ impl AuthSession {
         password: String,
         handler: Arc<dyn TwoFactorHandler>,
     ) -> Result<LoginResult, LoginError> {
-        // VERIFY: real constructor for AnisetteDataGenerator. Likely
-        // takes an anisette server URL (iloader/isideload default to
-        // a hosted server -- errors in isideload's issue tracker
-        // reference `ani.sidestore.io`) but the exact builder/method
-        // name needs confirming against isideload::anisette source
-        // before this compiles.
-        let anisette_generator = AnisetteDataGenerator::default();
+        let provider_instance = RemoteAnisetteProvider::new("https://anisette.v3.rs/".to_string());
+        let provider = Arc::new(RwLock::new(provider_instance));
+        let anisette_generator = AnisetteDataGenerator::new(provider);
 
         let mut account = AppleAccount::new(&apple_id, anisette_generator, false, None)
             .await
