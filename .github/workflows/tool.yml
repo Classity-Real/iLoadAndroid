@@ -29,6 +29,7 @@ jobs:
         run: |
           sdkmanager --install "ndk;27.0.12077973"
           echo "ANDROID_NDK_HOME=$ANDROID_SDK_ROOT/ndk/27.0.12077973" >> "$GITHUB_ENV"
+          echo "ANDROID_NDK_ROOT=$ANDROID_SDK_ROOT/ndk/27.0.12077973" >> "$GITHUB_ENV"
 
       - name: Set up Rust
         uses: dtolnay/rust-toolchain@v1
@@ -45,11 +46,9 @@ jobs:
           workspaces: rust/isideload-android
 
       - name: Install cargo-ndk
-        run: cargo install cargo-ndk --locked
+        run: cargo install cargo-ndk
 
-      # Builds the auth-layer cdylib for both ABIs and drops the .so files
-      # straight into the Gradle jniLibs source set.
-      - name: Build Rust auth crate for Android
+      - name: Build with cargo ndk
         working-directory: rust/isideload-android
         run: |
           cargo ndk \
@@ -58,9 +57,6 @@ jobs:
             -o ../../app/src/main/jniLibs \
             build --release
 
-      # uniffi-bindgen reads symbols out of the compiled cdylib to generate
-      # the Kotlin bindings that AuthBridge.kt wraps. Any one ABI's .so works
-      # for this step since the interface is the same across targets.
       - name: Generate uniffi Kotlin bindings
         working-directory: rust/isideload-android
         run: |
@@ -73,7 +69,7 @@ jobs:
         uses: gradle/actions/setup-gradle@v4
 
       - name: Build debug APK
-        run: gradle assembleDebug
+        run: ./gradlew assembleDebug
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
