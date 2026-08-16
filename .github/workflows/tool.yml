@@ -40,10 +40,9 @@ jobs:
       - name: Install cargo-ndk
         run: cargo install cargo-ndk --locked
 
-      - name: Debug - inspect isideload anisette API
+      - name: Debug - inspect isideload storage/anisette API
         working-directory: rust/isideload-android
-        run: (cargo fetch || true); find ~/.cargo/registry/src -path "*isideload-0.3.17/src/anisette*" -name "*.rs" -exec echo "=== {} ===" \; -exec cat {} \; || true
-
+        run: (cargo fetch || true); find ~/.cargo/registry/src -path "*isideload-0.3.17/src*" -name "*.rs" | xargs grep -l "SideloadingStorage" | xargs -I{} sh -c 'echo "=== {} ==="; cat {}' || true
 
       - name: Build with cargo ndk
         working-directory: rust/isideload-android
