@@ -29,9 +29,13 @@ jobs:
           echo "ANDROID_NDK_HOME=$ANDROID_SDK_ROOT/ndk/27.0.12077973" >> "$GITHUB_ENV"
 
       - name: Set up Rust
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@v1
         with:
+          toolchain: stable
           targets: aarch64-linux-android,armv7-linux-androideabi
+
+      - name: Ensure Rust Android targets are installed
+        run: rustup target add aarch64-linux-android armv7-linux-androideabi
 
       - name: Cache cargo/target
         uses: Swatinem/rust-cache@v2
