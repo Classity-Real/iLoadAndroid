@@ -6,11 +6,35 @@
 //! this crate's exported API ever opens a device connection. Real
 //! device/USB usage -- and the root requirement that comes with it --
 //! starts in a later phase (device layer, sideload/pairing layer).
+//!
+//! API confirmed against docs.rs/isideload/0.3.17 (auth::apple_account
+//! module) -- not guessed from README examples, which are stale for
+//! this version.
+//!
+//! `AnisetteDataGenerator::new()` takes an
+//! `Arc<RwLock<dyn AnisetteProvider + Send + Sync>>` (confirmed from a
+//! compiler error, not docs). The concrete provider isn't defined in
+//! `isideload` itself -- its anisette module wraps SideStore's
+//! `omnisette` crate, where the real type is
+//! `RemoteAnisetteProviderV3::new(url, configuration_path, serial)`
+//! (confirmed from that crate's source on GitHub). Module path below
+//! (`isideload::anisette::remote_v3::RemoteAnisetteProviderV3`) is
+//! inferred from isideload's own `anisette/remote_v3/` submodule
+//! (visible in past compiler error paths) re-exporting or wrapping
+//! omnisette's type -- marked VERIFY since it's inference, not a
+//! docs.rs page actually showing this path.
 
-use std::sync::{Arc, RwLock, Once};
+use std::sync::{Arc, Once};
+use tokio::sync::RwLock;
 
-use isideload::anisette::{AnisetteProvider, RemoteAnisetteProvider};
+use isideload::anisette::remote_v3::RemoteAnisetteProviderV3; // VERIFY: exact path
+use isideload::anisette::{AnisetteDataGenerator, AnisetteProvider};
 use isideload::auth::apple_account::{AppleAccount, TwoFactorCallbackResponse};
+
+/// Default anisette provisioning server. iloader/isideload's own default
+/// (referenced in isideload's issue tracker when this server has an
+/// outage) -- VERIFY this is still current before shipping.
+const DEFAULT_ANISETTE_SERVER: &str = "https://ani.sidestore.io";
 
 uniffi::setup_scaffolding!("isideload_android");
 
@@ -42,7 +66,11 @@ pub enum LoginResult {
 }
 
 /// What the login callback asks Kotlin to show the user, and what
-/// Kotlin can respond with.
+/// Kotlin can respond with. Intentionally minimal for now: the real
+/// `TwoFactorCallbackParams` type's exact fields (trusted device list,
+/// phone numbers, etc.) haven't been confirmed against the source yet
+/// -- this covers the common "enter the code you were sent" case only.
+/// Widen this once TwoFactorCallbackParams's fields are confirmed.
 #[derive(Debug, uniffi::Enum)]
 pub enum TwoFactorResponse {
     SubmitCode { code: String },
@@ -70,16 +98,36 @@ impl AuthSession {
         Self
     }
 
-    /// One call does the whole login, including any 2FA challenge.
+    /// One call does the whole login, including any 2FA challenge --
+    /// isideload's `AppleAccount::login` takes the 2FA callback
+    /// directly rather than returning a "needs 2FA" state to poll,
+    /// so there is no separate submit-code method to call afterward.
+    ///
+    /// `config_dir` must be a writable directory -- pass Android's
+    /// app-specific files dir (`context.filesDir.path` on the Kotlin
+    /// side) since Rust has no way to know that path itself. It's
+    /// where the anisette provider caches provisioning state between
+    /// calls; VERIFY it's actually used that way once this compiles.
     pub async fn login(
         &self,
         apple_id: String,
         password: String,
+        config_dir: String,
         handler: Arc<dyn TwoFactorHandler>,
     ) -> Result<LoginResult, LoginError> {
-        let provider_instance = RemoteAnisetteProvider::new("https://anisette.v3.rs/".to_string());
-        let provider = Arc::new(RwLock::new(provider_instance));
-        let anisette_generator = AnisetteProvider::new(provider);
+        // VERIFY: `serial` -- omnisette's RemoteAnisetteProviderV3::new
+        // takes a device serial/identifier string. No real device
+        // exists yet at this auth-only stage, so this is a placeholder
+        // per-install identifier, not necessarily what isideload
+        // expects here (it may need a real device serial later, once
+        // the device layer exists).
+        let provider = RemoteAnisetteProviderV3::new(
+            DEFAULT_ANISETTE_SERVER.to_string(),
+            config_dir.into(),
+            "isideload-android-placeholder".to_string(),
+        );
+        let anisette_generator =
+            AnisetteDataGenerator::new(Arc::new(RwLock::new(provider)) as Arc<RwLock<dyn AnisetteProvider + Send + Sync>>);
 
         let mut account = AppleAccount::new(&apple_id, anisette_generator, false, None)
             .await
@@ -110,16 +158,22 @@ impl AuthSession {
     }
 }
 
+/// AppleAccount does NOT implement Serialize (confirmed -- it holds an
+/// Arc<GrandSlam> network client, which can't be serialized). Persist
+/// only what's needed to identify the session: email + the session
+/// provisioning dictionary (`spd`). Reconstructing a full AppleAccount
+/// from this blob for a later sideload/cert-management phase is a
+/// separate, not-yet-written piece of work.
 #[derive(serde::Serialize)]
 struct StoredSession {
     email: String,
-    spd: Option<Vec<u8>>,
+    spd: Option<Vec<u8>>, // VERIFY: plist::Dictionary -> bytes encoding TBD
 }
 
 fn serialize_session(account: &AppleAccount) -> Result<Vec<u8>, LoginError> {
     let stored = StoredSession {
         email: account.email.clone(),
-        spd: None,
+        spd: None, // VERIFY: encode account.spd (plist::Dictionary) once needed
     };
     serde_json::to_vec(&stored).map_err(|e| LoginError::Serialization {
         message: e.to_string(),
