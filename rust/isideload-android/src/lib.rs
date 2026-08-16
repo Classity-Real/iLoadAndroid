@@ -13,21 +13,19 @@
 //!
 //! `AnisetteDataGenerator::new()` takes an
 //! `Arc<RwLock<dyn AnisetteProvider + Send + Sync>>` (confirmed from a
-//! compiler error, not docs). The concrete provider isn't defined in
-//! `isideload` itself -- its anisette module wraps SideStore's
-//! `omnisette` crate, where the real type is
-//! `RemoteAnisetteProviderV3::new(url, configuration_path, serial)`
-//! (confirmed from that crate's source on GitHub). Module path below
-//! (`isideload::anisette::remote_v3::RemoteAnisetteProviderV3`) is
-//! inferred from isideload's own `anisette/remote_v3/` submodule
-//! (visible in past compiler error paths) re-exporting or wrapping
-//! omnisette's type -- marked VERIFY since it's inference, not a
-//! docs.rs page actually showing this path.
+//! compiler error, not docs). The concrete provider is
+//! `isideload::anisette::remote_v3::RemoteV3AnisetteProvider` --
+//! confirmed directly from a compiler suggestion against the real
+//! module (not inferred/guessed), after an earlier wrong guess at the
+//! name (`RemoteAnisetteProviderV3`, transposed) failed to compile.
+//! Constructor signature (`new(url, configuration_path, serial)`) is
+//! still inferred from SideStore's upstream `omnisette` crate, which
+//! this type is presumed to wrap -- VERIFY if this doesn't compile.
 
 use std::sync::{Arc, Once};
 use tokio::sync::RwLock;
 
-use isideload::anisette::remote_v3::RemoteAnisetteProviderV3; // VERIFY: exact path
+use isideload::anisette::remote_v3::RemoteV3AnisetteProvider;
 use isideload::anisette::{AnisetteDataGenerator, AnisetteProvider};
 use isideload::auth::apple_account::{AppleAccount, TwoFactorCallbackResponse};
 
@@ -115,13 +113,13 @@ impl AuthSession {
         config_dir: String,
         handler: Arc<dyn TwoFactorHandler>,
     ) -> Result<LoginResult, LoginError> {
-        // VERIFY: `serial` -- omnisette's RemoteAnisetteProviderV3::new
-        // takes a device serial/identifier string. No real device
-        // exists yet at this auth-only stage, so this is a placeholder
-        // per-install identifier, not necessarily what isideload
-        // expects here (it may need a real device serial later, once
-        // the device layer exists).
-        let provider = RemoteAnisetteProviderV3::new(
+        // VERIFY: constructor argument names/order are inferred from
+        // omnisette's RemoteAnisetteProviderV3 (which this type is
+        // presumed to wrap under a different name) -- `serial` is a
+        // device serial/identifier string. No real device exists yet
+        // at this auth-only stage, so this is a placeholder per-install
+        // identifier.
+        let provider = RemoteV3AnisetteProvider::new(
             DEFAULT_ANISETTE_SERVER.to_string(),
             config_dir.into(),
             "isideload-android-placeholder".to_string(),
