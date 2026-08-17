@@ -50,11 +50,11 @@ fn ensure_init() {
         // We use `let _ =` because it will return an error if called multiple times, but `Once` guarantees it only runs on the first pass anyway.
         let _ = rustls::crypto::ring::default_provider().install_default();
 
-        // Configure the HTTP client to use the native certificate store
-        // This is needed for Android to properly verify certificates
+        // Configure the HTTP client to use the default rustls certificate store
+        // instead of the native certificate store (which fails on Android).
+        // This avoids the "rustls-platform-verifier could not load extra certs" error.
         let _ = isideload::util::http::set_default_client(
             isideload::util::http::ClientBuilder::new()
-                .with_native_roots()
                 .build()
                 .expect("Failed to build HTTP client")
         );
