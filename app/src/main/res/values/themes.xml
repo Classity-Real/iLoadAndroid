@@ -1,4 +1,4 @@
 <resources>
-    <!-- Using a standard Android theme that does not require the Material Components library -->
-    <style name="Theme.iLoadAndroid" parent="android:Theme.DeviceDefault.NoActionBar" />
+    <!-- Using a standard Android platform theme that does not require external libraries -->
+    <style name="Theme.iLoadAndroid" parent="android:Theme.Material.Light.NoActionBar" />
 </resources>
