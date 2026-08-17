@@ -2,7 +2,7 @@ package com.classityreal.iloadandroid.auth
 
 import uniffi.isideload_android.AuthSession
 import uniffi.isideload_android.LoginResult as FfiLoginResult
-import uniffi.isideload_android.LoginError as FfiLoginError
+import uniffi.isideload_android.LoginException as FfiLoginError
 import uniffi.isideload_android.TwoFactorHandler
 import uniffi.isideload_android.TwoFactorResponse
 import kotlinx.coroutines.CompletableDeferred
