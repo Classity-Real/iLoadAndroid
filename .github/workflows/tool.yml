@@ -11,6 +11,10 @@ on:
         type: boolean
         default: false
 
+# Grant GITHUB_TOKEN permissions to publish releases and upload assets
+permissions:
+  contents: write
+
 jobs:
   build:
     runs-on: ubuntu-latest
