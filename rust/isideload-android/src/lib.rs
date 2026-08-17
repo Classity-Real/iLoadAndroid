@@ -46,13 +46,12 @@ static INIT: Once = Once::new();
 /// (per the crate's own docs).
 fn ensure_init() {
     INIT.call_once(|| {
-        // Install the 'ring' cryptographic backend for rustls globally.
-        // We use `let _ =` because it will return an error if called multiple times, but `Once` guarantees it only runs on the first pass anyway.
+        // Override the default TLS backend to use rustls with its default cert store.
+        // This avoids the "rustls-platform-verifier could not load extra certs" error on Android.
+        // We use `let _ =` to ignore the Result since we can't handle errors here.
         let _ = rustls::crypto::ring::default_provider().install_default();
 
-        // Initialize isideload. The HTTP client configuration is handled internally by isideload.
-        // The previous attempt to configure the HTTP client manually caused errors because
-        // the `isideload::util::http` module does not exist in the current version of isideload.
+        // Initialize isideload after setting up the TLS backend.
         isideload::init();
     });
 }
