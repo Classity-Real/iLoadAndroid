@@ -70,6 +70,9 @@ dependencies {
     implementation("androidx.compose.material3:material3") // Material You (dynamicColorScheme)
     implementation("androidx.lifecycle:lifecycle-viewmodel-compose:2.8.4")
 
+    // Added Material Components library to resolve Theme.Material3.DayNight.NoActionBar
+    implementation("com.google.android.material:material:1.12.0")
+
     // Root shell access — checks for / requests root, runs privileged commands
     implementation("com.github.topjohnwu.libsu:core:5.2.2")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.8.1")
