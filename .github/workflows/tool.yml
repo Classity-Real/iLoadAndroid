@@ -5,6 +5,11 @@ on:
     branches: [main]
   pull_request:
   workflow_dispatch:
+    inputs:
+      create_release:
+        description: "Create a GitHub Release for this build"
+        type: boolean
+        default: false
 
 jobs:
   build:
@@ -66,3 +71,24 @@ jobs:
         with:
           name: iLoadAndroid-debug
           path: app/build/outputs/apk/debug/*.apk
+
+      - name: Compute APK checksum
+        if: github.event_name == 'workflow_dispatch' && inputs.create_release == true
+        id: checksum
+        run: |
+          APK_PATH=$(find app/build/outputs/apk/debug -name "*.apk" | head -n1)
+          echo "apk_path=$APK_PATH" >> "$GITHUB_OUTPUT"
+          echo "md5=$(md5sum "$APK_PATH" | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
+
+      - name: Create GitHub Release
+        if: github.event_name == 'workflow_dispatch' && inputs.create_release == true
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: build-${{ github.run_number }}
+          name: "iLoadAndroid build ${{ github.run_number }}"
+          body: |
+            Commit: [`${{ github.sha }}`](https://github.com/${{ github.repository }}/commit/${{ github.sha }})
+            MD5 (apk): `${{ steps.checksum.outputs.md5 }}`
+          files: ${{ steps.checksum.outputs.apk_path }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
