@@ -1,0 +1,98 @@
+name: Build iLoadAndroid
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      create_release:
+        description: "Create a GitHub Release for this build"
+        type: boolean
+        default: false
+
+# Grant GITHUB_TOKEN permissions to publish releases and upload assets
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install system dependencies
+        run: sudo apt-get update && sudo apt-get install -y libdbus-1-dev pkg-config
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install Android NDK
+        run: sdkmanager --install "ndk;27.0.12077973" && echo "ANDROID_NDK_HOME=$ANDROID_SDK_ROOT/ndk/27.0.12077973" >> "$GITHUB_ENV" && echo "ANDROID_NDK_ROOT=$ANDROID_SDK_ROOT/ndk/27.0.12077973" >> "$GITHUB_ENV"
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Ensure Rust Android targets are installed
+        run: for i in 1 2 3 4 5; do rustup target add aarch64-linux-android armv7-linux-androideabi && break || sleep 5; done
+
+      - name: Cache cargo/target
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: rust/isideload-android
+
+      - name: Install cargo-ndk
+        run: cargo install cargo-ndk --locked
+
+      - name: Debug - inspect isideload storage/anisette API
+        working-directory: rust/isideload-android
+        run: (cargo fetch || true); find ~/.cargo/registry/src -path "*isideload-0.3.17/src*" -name "*.rs" | xargs grep -l "SideloadingStorage" | xargs -I{} sh -c 'echo "=== {} ==="; cat {}' || true
+
+      - name: Build with cargo ndk
+        working-directory: rust/isideload-android
+        run: cargo ndk -t arm64-v8a -t armeabi-v7a -o ../../app/src/main/jniLibs build --release
+
+      - name: Generate uniffi Kotlin bindings
+        working-directory: rust/isideload-android
+        run: cargo run --bin uniffi-bindgen -- generate --library ../../app/src/main/jniLibs/arm64-v8a/libisideload_android.so --language kotlin --out-dir ../../app/src/main/java
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Build debug APK
+        run: gradle assembleDebug --stacktrace
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: iLoadAndroid-debug
+          path: app/build/outputs/apk/debug/*.apk
+
+      - name: Compute APK checksum
+        if: github.event_name == 'workflow_dispatch' && inputs.create_release == true
+        id: checksum
+        run: |
+          APK_PATH=$(find app/build/outputs/apk/debug -name "*.apk" | head -n1)
+          echo "apk_path=$APK_PATH" >> "$GITHUB_OUTPUT"
+          echo "md5=$(md5sum "$APK_PATH" | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
+
+      - name: Create GitHub Release
+        if: github.event_name == 'workflow_dispatch' && inputs.create_release == true
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: build-${{ github.run_number }}
+          name: "iLoadAndroid build ${{ github.run_number }}"
+          body: |
+            Commit: [`${{ github.sha }}`](https://github.com/${{ github.repository }}/commit/${{ github.sha }})
+            MD5 (apk): `${{ steps.checksum.outputs.md5 }}`
+          files: ${{ steps.checksum.outputs.apk_path }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
