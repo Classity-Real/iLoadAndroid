@@ -49,10 +49,10 @@ fn ensure_init() {
 
 #[derive(Debug, thiserror::Error, uniffi::Error)]
 pub enum LoginError {
-    #[error("login failed: {message}")]
-    Failed { message: String },
-    #[error("session could not be serialized: {message}")]
-    Serialization { message: String },
+    #[error("login failed: {reason}")]
+    Failed { reason: String },
+    #[error("session could not be serialized: {reason}")]
+    Serialization { reason: String },
 }
 
 #[derive(Debug, uniffi::Enum)]
@@ -131,7 +131,7 @@ impl AuthSession {
             "isideload-android-placeholder".to_string(),
         )
         .map_err(|e| LoginError::Failed {
-            message: e.to_string(),
+            reason: e.to_string(),
         })?;
         let anisette_generator =
             AnisetteDataGenerator::new(Arc::new(RwLock::new(provider)) as Arc<RwLock<dyn AnisetteProvider + Send + Sync>>);
@@ -139,7 +139,7 @@ impl AuthSession {
         let mut account = AppleAccount::new(&apple_id, anisette_generator, false, None)
             .await
             .map_err(|e| LoginError::Failed {
-                message: e.to_string(),
+                reason: e.to_string(),
             })?;
 
         account
@@ -157,7 +157,7 @@ impl AuthSession {
             })
             .await
             .map_err(|e| LoginError::Failed {
-                message: e.to_string(),
+                reason: e.to_string(),
             })?;
 
         let session = serialize_session(&account)?;
@@ -183,6 +183,6 @@ fn serialize_session(account: &AppleAccount) -> Result<Vec<u8>, LoginError> {
         spd: None, // VERIFY: encode account.spd (plist::Dictionary) once needed
     };
     serde_json::to_vec(&stored).map_err(|e| LoginError::Serialization {
-        message: e.to_string(),
+        reason: e.to_string(),
     })
 }
