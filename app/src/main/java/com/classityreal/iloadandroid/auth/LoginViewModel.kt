@@ -19,12 +19,19 @@ class LoginViewModel(
         private set
     var errorMessage by mutableStateOf<String?>(null)
         private set
-
-    /** Set once login succeeds. Caller (MainActivity/nav layer) is responsible
-     *  for persisting this via Android Keystore-backed storage — this
-     *  ViewModel does not touch disk. */
     var sessionBlob by mutableStateOf<ByteArray?>(null)
         private set
+
+    init {
+        viewModelScope.launch {
+            authBridge.twoFactorRequested.collect { requested ->
+                if (requested) {
+                    step = LoginStep.TWO_FACTOR
+                    isLoading = false
+                }
+            }
+        }
+    }
 
     fun submitCredentials(appleId: String, password: String) {
         if (appleId.isBlank() || password.isBlank()) {
@@ -38,15 +45,14 @@ class LoginViewModel(
                 is LoginOutcome.Success -> {
                     sessionBlob = outcome.sessionBlob
                     step = LoginStep.DONE
-                }
-                is LoginOutcome.TwoFactorRequired -> {
-                    step = LoginStep.TWO_FACTOR
+                    isLoading = false
                 }
                 is LoginOutcome.Failure -> {
                     errorMessage = outcome.message
+                    step = LoginStep.CREDENTIALS
+                    isLoading = false
                 }
             }
-            isLoading = false
         }
     }
 
@@ -57,20 +63,8 @@ class LoginViewModel(
         }
         errorMessage = null
         isLoading = true
-        viewModelScope.launch {
-            when (val outcome = authBridge.submit2fa(code)) {
-                is LoginOutcome.Success -> {
-                    sessionBlob = outcome.sessionBlob
-                    step = LoginStep.DONE
-                }
-                is LoginOutcome.TwoFactorRequired -> {
-                    errorMessage = "Code rejected, try again"
-                }
-                is LoginOutcome.Failure -> {
-                    errorMessage = outcome.message
-                }
-            }
-            isLoading = false
-        }
+        authBridge.submitTwoFactorCode(code)
+        // The still-running submitCredentials() coroutine's login() call
+        // unblocks here and delivers the real result via its own when-branch.
     }
 }

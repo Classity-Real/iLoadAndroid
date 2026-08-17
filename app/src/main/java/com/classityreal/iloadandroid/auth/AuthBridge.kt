@@ -6,22 +6,22 @@ import uniffi.isideload_android.LoginException as FfiLoginError
 import uniffi.isideload_android.TwoFactorHandler
 import uniffi.isideload_android.TwoFactorResponse
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 
 sealed class LoginOutcome {
     data class Success(val sessionBlob: ByteArray) : LoginOutcome()
-    data object TwoFactorRequired : LoginOutcome()
     data class Failure(val message: String) : LoginOutcome()
 }
 
-/**
- * App-facing auth API. Holds one native AuthSession per login attempt;
- * the underlying object keeps the in-progress 2FA state, so this class
- * must not be recreated between `login()` and `submit2fa()` calls.
- */
 class AuthBridge(private val configDir: String = "") : TwoFactorHandler {
 
     private val native = AuthSession()
-    private val twoFactorCode = CompletableDeferred<String>()
+    private var twoFactorCode: CompletableDeferred<String>? = null
+
+    private val _twoFactorRequested = MutableStateFlow(false)
+    val twoFactorRequested: StateFlow<Boolean> = _twoFactorRequested.asStateFlow()
 
     suspend fun login(appleId: String, password: String): LoginOutcome {
         return try {
@@ -30,20 +30,20 @@ class AuthBridge(private val configDir: String = "") : TwoFactorHandler {
             }
         } catch (e: FfiLoginError) {
             LoginOutcome.Failure(e.message ?: "login failed")
+        } finally {
+            _twoFactorRequested.value = false
         }
     }
 
     override suspend fun onTwoFactorRequired(): TwoFactorResponse {
-        // This is called by the Rust side when 2FA is needed.
-        // We wait for the user to provide the code via submit2fa().
-        val code = twoFactorCode.await()
+        val deferred = CompletableDeferred<String>()
+        twoFactorCode = deferred
+        _twoFactorRequested.value = true
+        val code = deferred.await()
         return TwoFactorResponse.SubmitCode(code)
     }
 
-    suspend fun submit2fa(code: String): LoginOutcome {
-        twoFactorCode.complete(code)
-        // We return Success here as a placeholder; the actual result of the login
-        // flow is returned by the original login() call.
-        return LoginOutcome.Success(byteArrayOf())
+    fun submitTwoFactorCode(code: String) {
+        twoFactorCode?.complete(code)
     }
 }
