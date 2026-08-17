@@ -1,3 +1,4 @@
 <resources>
+    <!-- Using the Material3 theme provided by the androidx.compose.material3 library -->
     <style name="Theme.iLoadAndroid" parent="Theme.Material3.DayNight.NoActionBar" />
 </resources>
