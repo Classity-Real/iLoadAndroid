@@ -18,9 +18,11 @@
 //! confirmed directly from a compiler suggestion against the real
 //! module (not inferred/guessed), after an earlier wrong guess at the
 //! name (`RemoteAnisetteProviderV3`, transposed) failed to compile.
-//! Constructor signature (`new(url, configuration_path, serial)`) is
-//! still inferred from SideStore's upstream `omnisette` crate, which
-//! this type is presumed to wrap -- VERIFY if this doesn't compile.
+//! Constructor signature `new(url: &str, storage: Box<dyn
+//! SideloadingStorage>, serial_number: String) -> Result<Self, Report>`
+//! is confirmed directly against docs.rs/isideload/0.3.17
+//! (isideload::anisette::remote_v3::RemoteV3AnisetteProvider), not
+//! inferred from the upstream `omnisette` crate it's presumed to wrap.
 
 use std::sync::{Arc, Once};
 use tokio::sync::RwLock;
@@ -28,6 +30,7 @@ use tokio::sync::RwLock;
 use isideload::anisette::remote_v3::RemoteV3AnisetteProvider;
 use isideload::anisette::{AnisetteDataGenerator, AnisetteProvider};
 use isideload::auth::apple_account::{AppleAccount, TwoFactorCallbackResponse};
+use isideload::util::storage::InMemoryStorage;
 
 /// Default anisette provisioning server. iloader/isideload's own default
 /// (referenced in isideload's issue tracker when this server has an
@@ -110,7 +113,7 @@ impl AuthSession {
         &self,
         apple_id: String,
         password: String,
-        _config_dir: String, // unused until SideloadingStorage impl is known -- see below
+        _config_dir: String, // unused -- reserved for a future persistent SideloadingStorage impl
         handler: Arc<dyn TwoFactorHandler>,
     ) -> Result<LoginResult, LoginError> {
         // VERIFY: constructor argument names/order are inferred from
@@ -120,14 +123,21 @@ impl AuthSession {
         // at this auth-only stage, so this is a placeholder per-install
         // identifier.
         //
-        // Second arg is confirmed NOT a path -- it's Box<dyn
-        // SideloadingStorage>, a storage abstraction (compiler error).
-        // That trait isn't in the anisette module the debug CI step
-        // greps, so this won't compile until it's found -- see the
-        // widened debug step in build.yml.
+        // Second arg is Box<dyn SideloadingStorage> (confirmed via
+        // isideload::util::storage::SideloadingStorage) -- a small
+        // trait (store/retrieve by string key, plus byte-oriented
+        // helpers) for persisting anisette provisioning state and
+        // certs. isideload ships InMemoryStorage as a ready-made
+        // implementor, used below.
+        // In-memory only for now: anisette provisioning state does not
+        // persist across process restarts, so a fresh provisioning
+        // round-trip happens on every cold login. Fine for the
+        // auth-only scope of this phase -- swap for a persistent
+        // (e.g. EncryptedSharedPreferences-backed) SideloadingStorage
+        // impl once provisioning-state persistence actually matters.
         let provider = RemoteV3AnisetteProvider::new(
             DEFAULT_ANISETTE_SERVER,
-            todo!("SideloadingStorage impl -- see debug step output"),
+            Box::new(InMemoryStorage::new()),
             "isideload-android-placeholder".to_string(),
         )
         .map_err(|e| LoginError::Failed {
