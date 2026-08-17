@@ -46,6 +46,12 @@ static INIT: Once = Once::new();
 /// (per the crate's own docs).
 fn ensure_init() {
     INIT.call_once(|| {
+        // --- ADD THIS LINE ---
+        // Install the 'ring' cryptographic backend for rustls globally.
+        // We use `let _ =` because it will return an error if called multiple times, 
+        // but `Once` guarantees it only runs on the first pass anyway.
+        let _ = rustls::crypto::ring::default_provider().install_default();
+        
         isideload::init();
     });
 }
