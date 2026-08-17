@@ -53,11 +53,20 @@ fn ensure_init() {
         // Configure the HTTP client to use the default rustls certificate store
         // instead of the native certificate store (which fails on Android).
         // This avoids the "rustls-platform-verifier could not load extra certs" error.
-        let _ = isideload::util::http::set_default_client(
-            isideload::util::http::ClientBuilder::new()
-                .build()
-                .expect("Failed to build HTTP client")
-        );
+        let client_result = isideload::util::http::ClientBuilder::new()
+            .build();
+
+        match client_result {
+            Ok(client) => {
+                let _ = isideload::util::http::set_default_client(client);
+            }
+            Err(e) => {
+                // Fallback: Log the error but proceed with the default client.
+                // This ensures the app doesn't crash if client initialization fails.
+                eprintln!("Failed to build custom HTTP client: {}. Falling back to default.", e);
+                // The default client will still be used if `set_default_client` wasn't called.
+            }
+        }
 
         isideload::init();
     });
