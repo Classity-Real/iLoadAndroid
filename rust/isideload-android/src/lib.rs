@@ -48,7 +48,7 @@ use webpki_roots::TLS_SERVER_ROOTS;
 
 fn ensure_init() {
     INIT.call_once(|| {
-        let _ = rustls::crypto::ring::default_provider().install_default();
+        let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
         
         // Configure rustls to use bundled Mozilla root certificates
         // (avoids the "platform-verifier could not load extra certs" error on Android)
