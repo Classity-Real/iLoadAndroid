@@ -16,7 +16,7 @@ static INIT: Once = Once::new();
 
 /// Omnisette server URL. In CI, runs as a service on localhost:6969.
 /// For local testing, set to your dev machine IP: http://192.168.1.X:6969
-const OMNISETTE_SERVER: &str = "http://localhost:6969";
+const OMNISETTE_SERVER: &str = "https://ani.sidestore.io";
 
 /// Must run exactly once before any login attempt.
 fn ensure_init() {
