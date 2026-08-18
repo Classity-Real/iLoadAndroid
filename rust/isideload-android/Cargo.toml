@@ -12,29 +12,10 @@ name = "uniffi-bindgen"
 path = "src/bin/uniffi-bindgen.rs"
 
 [dependencies]
-# CORRECTED (was wrong): `idevice` is not cleanly feature-gated inside
-# isideload -- its root lib.rs references `idevice::IdeviceError`
-# unconditionally, so `default-features = false` on isideload alone
-# breaks the build (confirmed by CI: E0432/E0433 for both `idevice` and
-# `tokio-tungstenite`, which the anisette remote_v3 websocket path needs
-# even for a pure login flow).
-#
-# Fix, matching isideload's own documented usage pattern: keep isideload
-# on its normal defaults, and add `idevice` explicitly ourselves with
-# ONLY the `usbmuxd` feature. This still links idevice's socket-protocol
-# code at compile time (unavoidable -- it's baked into isideload's error
-# type) but never touches raw USB/libusb at runtime, so the auth-only
-# scope holds: no root needed, no device required to log in.
-#
-# `keyring` is still worth disabling if isideload exposes a feature for
-# it -- confirm the exact flag name before assuming; don't repeat the
-# same mistake by guessing again. Until confirmed, leaving isideload's
-# defaults on (which may include keyring) rather than risk another
-# silent-breakage guess; its desktop-keychain code just won't be called
-# from this crate either way.
-isideload = "0.3"
+isideload = { version = "0.3", default-features = false, features = ["rustls-tls-webpki", "anisette", "auth"] }
 idevice = { version = "0.1.61", default-features = false, features = ["usbmuxd", "ring"] }
 async-trait = "0.1"
+webpki-roots = "0.26"
 
 # rustls itself is only a transitive dependency (pulled in by isideload's
 # HTTP client), but since rustls 0.23 it no longer auto-selects a crypto

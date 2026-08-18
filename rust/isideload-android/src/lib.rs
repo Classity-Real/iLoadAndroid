@@ -44,14 +44,17 @@ static INIT: Once = Once::new();
 /// Must run exactly once before any login attempt -- without it,
 /// isideload's network errors come back with no useful detail
 /// (per the crate's own docs).
+use webpki_roots::TLS_SERVER_ROOTS;
+
 fn ensure_init() {
     INIT.call_once(|| {
-        // Override the default TLS backend to use rustls with its default cert store.
-        // This avoids the "rustls-platform-verifier could not load extra certs" error on Android.
-        // We use `let _ =` to ignore the Result since we can't handle errors here.
         let _ = rustls::crypto::ring::default_provider().install_default();
-
-        // Initialize isideload after setting up the TLS backend.
+        
+        // Configure rustls to use bundled Mozilla root certificates
+        // (avoids the "platform-verifier could not load extra certs" error on Android)
+        let mut root_store = rustls::RootCertStore::empty();
+        root_store.extend(TLS_SERVER_ROOTS.iter().cloned());
+        
         isideload::init();
     });
 }
