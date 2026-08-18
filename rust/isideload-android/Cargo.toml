@@ -23,16 +23,6 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 thiserror = "2"
 
-# rustls itself is only a transitive dependency (pulled in by isideload's
-# HTTP client), but since rustls 0.23 it no longer auto-selects a crypto
-# backend -- one must be installed explicitly at startup or every TLS
-# connection panics/errors at runtime (confirmed via crash log, not a
-# guess). Pinned to the `ring` backend, not the `aws-lc-rs` default, to
-# match idevice's own `ring` feature choice above and avoid pulling in
-# aws-lc-rs's C/cmake build requirements on top of the Android NDK
-# cross-compile toolchain.
-rustls = { version = "0.23", default-features = false, features = ["ring"] }
-
 uniffi = { version = "0.28", features = ["tokio", "cli"] }
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync"] }
 serde = { version = "1", features = ["derive"] }
