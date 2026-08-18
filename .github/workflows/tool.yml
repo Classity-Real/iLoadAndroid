@@ -2,7 +2,7 @@ name: Build iLoadAndroid
 
 permissions:
   contents: write
-  
+
 on:
   push:
     branches: [main]
@@ -12,6 +12,17 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
+    
+    services:
+      omnisette:
+        image: ghcr.io/sidestore/omnisette-server:latest
+        ports:
+          - 6969:80
+        options: >-
+          --health-cmd="curl -f http://localhost/health || exit 1"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=3
 
     steps:
       - name: Checkout
@@ -67,9 +78,15 @@ jobs:
       - name: Install cargo-ndk
         run: cargo install cargo-ndk --locked
 
-      - name: Debug - inspect isideload storage/anisette API
-        working-directory: rust/isideload-android
-        run: (cargo fetch || true); find ~/.cargo/registry/src -path "*isideload-0.3.17/src*" -name "*.rs" | xargs grep -l "SideloadingStorage" | xargs -I{} sh -c 'echo "=== {} ==="; cat {}' || true
+      - name: Wait for omnisette-server
+        run: |
+          for i in {1..30}; do
+            curl -f http://localhost:6969/health && echo "omnisette-server is ready" && exit 0
+            echo "Waiting for omnisette-server... ($i/30)"
+            sleep 2
+          done
+          echo "omnisette-server failed to start"
+          exit 1
 
       - name: Build with cargo ndk
         working-directory: rust/isideload-android

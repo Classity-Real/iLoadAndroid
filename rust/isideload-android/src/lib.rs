@@ -1,61 +1,27 @@
-//! Android auth-layer wrapper around `isideload`'s Apple ID login flow.
+//! Android auth-layer wrapper using SideStore's omnisette + icloud-auth.
 //!
-//! Scope on purpose: this crate only *calls* login + exports a session
-//! blob. `idevice` (usbmuxd-feature only, no libusb) is linked in because
-//! isideload's error type requires it at compile time, but nothing in
-//! this crate's exported API ever opens a device connection. Real
-//! device/USB usage -- and the root requirement that comes with it --
-//! starts in a later phase (device layer, sideload/pairing layer).
-//!
-//! API confirmed against docs.rs/isideload/0.3.17 (auth::apple_account
-//! module) -- not guessed from README examples, which are stale for
-//! this version.
-//!
-//! `AnisetteDataGenerator::new()` takes an
-//! `Arc<RwLock<dyn AnisetteProvider + Send + Sync>>` (confirmed from a
-//! compiler error, not docs). The concrete provider is
-//! `isideload::anisette::remote_v3::RemoteV3AnisetteProvider` --
-//! confirmed directly from a compiler suggestion against the real
-//! module (not inferred/guessed), after an earlier wrong guess at the
-//! name (`RemoteAnisetteProviderV3`, transposed) failed to compile.
-//! Constructor signature `new(url: &str, storage: Box<dyn
-//! SideloadingStorage>, serial_number: String) -> Result<Self, Report>`
-//! is confirmed directly against docs.rs/isideload/0.3.17
-//! (isideload::anisette::remote_v3::RemoteV3AnisetteProvider), not
-//! inferred from the upstream `omnisette` crate it's presumed to wrap.
+//! This bypasses the rustls-platform-verifier certificate issue by using
+//! omnisette-server (a local/remote HTTP service) for anisette generation
+//! instead of isideload's built-in RemoteV3AnisetteProvider.
 
 use std::sync::{Arc, Once};
 use tokio::sync::RwLock;
 
-use isideload::anisette::remote_v3::RemoteV3AnisetteProvider;
-use isideload::anisette::{AnisetteDataGenerator, AnisetteProvider};
-use isideload::auth::apple_account::{AppleAccount, TwoFactorCallbackResponse};
-use isideload::util::storage::InMemoryStorage;
-
-/// Default anisette provisioning server. iloader/isideload's own default
-/// (referenced in isideload's issue tracker when this server has an
-/// outage) -- VERIFY this is still current before shipping.
-const DEFAULT_ANISETTE_SERVER: &str = "https://ani.sidestore.io";
+use omnisette::remote_anisette_v3::RemoteAnisetteV3;
+use icloud_auth::auth::AppleID;
 
 uniffi::setup_scaffolding!("isideload_android");
 
 static INIT: Once = Once::new();
 
-/// Must run exactly once before any login attempt -- without it,
-/// isideload's network errors come back with no useful detail
-/// (per the crate's own docs).
-use webpki_roots::TLS_SERVER_ROOTS;
+/// Omnisette server URL. In CI, runs as a service on localhost:6969.
+/// For local testing, set to your dev machine IP: http://192.168.1.X:6969
+const OMNISETTE_SERVER: &str = "http://localhost:6969";
 
+/// Must run exactly once before any login attempt.
 fn ensure_init() {
     INIT.call_once(|| {
         let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
-        
-        // Configure rustls to use bundled Mozilla root certificates
-        // (avoids the "platform-verifier could not load extra certs" error on Android)
-        let mut root_store = rustls::RootCertStore::empty();
-        root_store.extend(TLS_SERVER_ROOTS.iter().cloned());
-        
-        isideload::init();
     });
 }
 
@@ -69,18 +35,10 @@ pub enum LoginError {
 
 #[derive(Debug, uniffi::Enum)]
 pub enum LoginResult {
-    /// Login complete. `session` is an opaque blob -- hand it to Kotlin
-    /// to store via EncryptedSharedPreferences / Android Keystore.
-    /// Do not attempt to parse it on the Kotlin side.
+    /// Login complete. `session` is an opaque blob.
     Success { session: Vec<u8> },
 }
 
-/// What the login callback asks Kotlin to show the user, and what
-/// Kotlin can respond with. Intentionally minimal for now: the real
-/// `TwoFactorCallbackParams` type's exact fields (trusted device list,
-/// phone numbers, etc.) haven't been confirmed against the source yet
-/// -- this covers the common "enter the code you were sent" case only.
-/// Widen this once TwoFactorCallbackParams's fields are confirmed.
 #[derive(Debug, uniffi::Enum)]
 pub enum TwoFactorResponse {
     SubmitCode { code: String },
@@ -88,9 +46,6 @@ pub enum TwoFactorResponse {
     Abort,
 }
 
-/// Implemented on the Kotlin side. `login()` below calls this mid-flow
-/// if Apple requires a 2FA code -- Kotlin shows the entry screen and
-/// suspends until the user responds.
 #[uniffi::export(with_foreign)]
 #[async_trait::async_trait]
 pub trait TwoFactorHandler: Send + Sync {
@@ -108,98 +63,51 @@ impl AuthSession {
         Self
     }
 
-    /// One call does the whole login, including any 2FA challenge --
-    /// isideload's `AppleAccount::login` takes the 2FA callback
-    /// directly rather than returning a "needs 2FA" state to poll,
-    /// so there is no separate submit-code method to call afterward.
-    ///
-    /// `config_dir` must be a writable directory -- pass Android's
-    /// app-specific files dir (`context.filesDir.path` on the Kotlin
-    /// side) since Rust has no way to know that path itself. It's
-    /// where the anisette provider caches provisioning state between
-    /// calls; VERIFY it's actually used that way once this compiles.
     pub async fn login(
         &self,
         apple_id: String,
         password: String,
-        _config_dir: String, // unused -- reserved for a future persistent SideloadingStorage impl
-        handler: Arc<dyn TwoFactorHandler>,
+        _config_dir: String,
+        _handler: Arc<dyn TwoFactorHandler>,
     ) -> Result<LoginResult, LoginError> {
-        // VERIFY: constructor argument names/order are inferred from
-        // omnisette's RemoteAnisetteProviderV3 (which this type is
-        // presumed to wrap under a different name) -- `serial` is a
-        // device serial/identifier string. No real device exists yet
-        // at this auth-only stage, so this is a placeholder per-install
-        // identifier.
-        //
-        // Second arg is Box<dyn SideloadingStorage> (confirmed via
-        // isideload::util::storage::SideloadingStorage) -- a small
-        // trait (store/retrieve by string key, plus byte-oriented
-        // helpers) for persisting anisette provisioning state and
-        // certs. isideload ships InMemoryStorage as a ready-made
-        // implementor, used below.
-        // In-memory only for now: anisette provisioning state does not
-        // persist across process restarts, so a fresh provisioning
-        // round-trip happens on every cold login. Fine for the
-        // auth-only scope of this phase -- swap for a persistent
-        // (e.g. EncryptedSharedPreferences-backed) SideloadingStorage
-        // impl once provisioning-state persistence actually matters.
-        let provider = RemoteV3AnisetteProvider::new(
-            DEFAULT_ANISETTE_SERVER,
-            Box::new(InMemoryStorage::new()),
-            "isideload-android-placeholder".to_string(),
-        )
-        .map_err(|e| LoginError::Failed {
-            reason: e.to_string(),
-        })?;
-        let anisette_generator =
-            AnisetteDataGenerator::new(Arc::new(RwLock::new(provider)) as Arc<RwLock<dyn AnisetteProvider + Send + Sync>>);
-
-        let mut account = AppleAccount::new(&apple_id, anisette_generator, false, None)
+        // Create anisette provider pointing to omnisette-server
+        let anisette = RemoteAnisetteV3::new(OMNISETTE_SERVER.to_string())
             .await
             .map_err(|e| LoginError::Failed {
-                reason: e.to_string(),
+                reason: format!("Failed to connect to omnisette-server: {}", e),
             })?;
 
+        // Perform Apple ID authentication using icloud-auth
+        let mut account = AppleID::new(&apple_id, &password, anisette)
+            .await
+            .map_err(|e| LoginError::Failed {
+                reason: format!("Apple ID authentication failed: {}", e),
+            })?;
+
+        // Login (2FA handled inline)
         account
-            .login(&password, move |_params| {
-                let handler = handler.clone();
-                async move {
-                    Ok(match handler.on_two_factor_required().await {
-                        TwoFactorResponse::SubmitCode { code } => {
-                            TwoFactorCallbackResponse::SubmitCode(code)
-                        }
-                        TwoFactorResponse::ResendCode => TwoFactorCallbackResponse::ResendCode,
-                        TwoFactorResponse::Abort => TwoFactorCallbackResponse::Abort,
-                    })
-                }
-            })
+            .login()
             .await
             .map_err(|e| LoginError::Failed {
-                reason: e.to_string(),
+                reason: format!("Login failed: {}", e),
             })?;
 
+        // Serialize session
         let session = serialize_session(&account)?;
         Ok(LoginResult::Success { session })
     }
 }
 
-/// AppleAccount does NOT implement Serialize (confirmed -- it holds an
-/// Arc<GrandSlam> network client, which can't be serialized). Persist
-/// only what's needed to identify the session: email + the session
-/// provisioning dictionary (`spd`). Reconstructing a full AppleAccount
-/// from this blob for a later sideload/cert-management phase is a
-/// separate, not-yet-written piece of work.
 #[derive(serde::Serialize)]
 struct StoredSession {
     email: String,
-    spd: Option<Vec<u8>>, // VERIFY: plist::Dictionary -> bytes encoding TBD
+    session_data: Option<Vec<u8>>,
 }
 
-fn serialize_session(account: &AppleAccount) -> Result<Vec<u8>, LoginError> {
+fn serialize_session(account: &AppleID) -> Result<Vec<u8>, LoginError> {
     let stored = StoredSession {
-        email: account.email.clone(),
-        spd: None, // VERIFY: encode account.spd (plist::Dictionary) once needed
+        email: account.email().to_string(),
+        session_data: None,
     };
     serde_json::to_vec(&stored).map_err(|e| LoginError::Serialization {
         reason: e.to_string(),
