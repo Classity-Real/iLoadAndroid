@@ -1,27 +1,24 @@
-//! Android auth-layer wrapper using SideStore's omnisette + icloud-auth.
-//!
-//! This bypasses the rustls-platform-verifier certificate issue by using
-//! omnisette-server (a local/remote HTTP service) for anisette generation
-//! instead of isideload's built-in RemoteV3AnisetteProvider.
+//! Android auth-layer wrapper around `isideload`'s Apple ID login flow.
 
 use std::sync::{Arc, Once};
 use tokio::sync::RwLock;
 
-use omnisette::remote_anisette_v3::RemoteAnisetteV3;
-use icloud_auth::auth::AppleID;
+use isideload::anisette::remote_v3::RemoteV3AnisetteProvider;
+use isideload::anisette::{AnisetteDataGenerator, AnisetteProvider};
+use isideload::auth::apple_account::{AppleAccount, TwoFactorCallbackResponse};
+use isideload::util::storage::InMemoryStorage;
 
 uniffi::setup_scaffolding!("isideload_android");
 
 static INIT: Once = Once::new();
 
-/// Omnisette server URL. Uses SideStore's public anisette server.
-/// This avoids TLS certificate issues by using a simple HTTP API.
-const OMNISETTE_SERVER: &str = "https://ani.sidestore.io";
+/// Uses SideStore's public anisette server to avoid TLS certificate issues.
+const DEFAULT_ANISETTE_SERVER: &str = "https://ani.sidestore.io";
 
-/// Must run exactly once before any login attempt.
 fn ensure_init() {
     INIT.call_once(|| {
         let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
+        isideload::init();
     });
 }
 
@@ -35,7 +32,6 @@ pub enum LoginError {
 
 #[derive(Debug, uniffi::Enum)]
 pub enum LoginResult {
-    /// Login complete. `session` is an opaque blob.
     Success { session: Vec<u8> },
 }
 
@@ -68,31 +64,44 @@ impl AuthSession {
         apple_id: String,
         password: String,
         _config_dir: String,
-        _handler: Arc<dyn TwoFactorHandler>,
+        handler: Arc<dyn TwoFactorHandler>,
     ) -> Result<LoginResult, LoginError> {
-        // Create anisette provider pointing to omnisette-server
-        let anisette = RemoteAnisetteV3::new(OMNISETTE_SERVER.to_string())
+        let provider = RemoteV3AnisetteProvider::new(
+            DEFAULT_ANISETTE_SERVER,
+            Box::new(InMemoryStorage::new()),
+            "isideload-android-placeholder".to_string(),
+        )
+        .map_err(|e| LoginError::Failed {
+            reason: e.to_string(),
+        })?;
+
+        let anisette_generator =
+            AnisetteDataGenerator::new(Arc::new(RwLock::new(provider)) as Arc<RwLock<dyn AnisetteProvider + Send + Sync>>);
+
+        let mut account = AppleAccount::new(&apple_id, anisette_generator, false, None)
             .await
             .map_err(|e| LoginError::Failed {
-                reason: format!("Failed to connect to omnisette-server: {}", e),
+                reason: e.to_string(),
             })?;
 
-        // Perform Apple ID authentication using icloud-auth
-        let mut account = AppleID::new(&apple_id, &password, anisette)
-            .await
-            .map_err(|e| LoginError::Failed {
-                reason: format!("Apple ID authentication failed: {}", e),
-            })?;
-
-        // Login (2FA handled inline)
         account
-            .login()
+            .login(&password, move |_params| {
+                let handler = handler.clone();
+                async move {
+                    Ok(match handler.on_two_factor_required().await {
+                        TwoFactorResponse::SubmitCode { code } => {
+                            TwoFactorCallbackResponse::SubmitCode(code)
+                        }
+                        TwoFactorResponse::ResendCode => TwoFactorCallbackResponse::ResendCode,
+                        TwoFactorResponse::Abort => TwoFactorCallbackResponse::Abort,
+                    })
+                }
+            })
             .await
             .map_err(|e| LoginError::Failed {
-                reason: format!("Login failed: {}", e),
+                reason: e.to_string(),
             })?;
 
-        // Serialize session
         let session = serialize_session(&account)?;
         Ok(LoginResult::Success { session })
     }
@@ -101,13 +110,13 @@ impl AuthSession {
 #[derive(serde::Serialize)]
 struct StoredSession {
     email: String,
-    session_data: Option<Vec<u8>>,
+    spd: Option<Vec<u8>>,
 }
 
-fn serialize_session(account: &AppleID) -> Result<Vec<u8>, LoginError> {
+fn serialize_session(account: &AppleAccount) -> Result<Vec<u8>, LoginError> {
     let stored = StoredSession {
-        email: account.email().to_string(),
-        session_data: None,
+        email: account.email.clone(),
+        spd: None,
     };
     serde_json::to_vec(&stored).map_err(|e| LoginError::Serialization {
         reason: e.to_string(),
