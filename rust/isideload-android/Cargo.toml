@@ -13,7 +13,7 @@ path = "src/bin/uniffi-bindgen.rs"
 
 [dependencies]
 omnisette = { git = "https://github.com/SideStore/apple-private-apis", branch = "master" }
-isideload = "0.3"
+isideload = { git = "https://github.com/Classity-Real/isideload", branch = "main" }
 idevice = { version = "0.1.61", default-features = false, features = ["usbmuxd", "ring"] }
 async-trait = "0.1"
 rustls = { version = "0.23", default-features = false, features = ["aws_lc_rs"] }
