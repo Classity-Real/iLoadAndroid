@@ -78,7 +78,7 @@ impl AuthSession {
         let anisette_generator =
             AnisetteDataGenerator::new(Arc::new(RwLock::new(provider)) as Arc<RwLock<dyn AnisetteProvider + Send + Sync>>);
 
-        let mut account = AppleAccount::new(&apple_id, anisette_generator)
+        let mut account = AppleAccount::new(&apple_id, anisette_generator, false)
             .await
             .map_err(|e| LoginError::Failed {
                 reason: e.to_string(),
