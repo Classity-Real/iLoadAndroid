@@ -64,7 +64,7 @@ impl AuthSession {
         apple_id: String,
         password: String,
         _config_dir: String,
-        handler: Arc<dyn TwoFactorHandler>,
+        _handler: Arc<dyn TwoFactorHandler>,
     ) -> Result<LoginResult, LoginError> {
         let provider = RemoteV3AnisetteProvider::new(
             DEFAULT_ANISETTE_SERVER,
@@ -78,25 +78,16 @@ impl AuthSession {
         let anisette_generator =
             AnisetteDataGenerator::new(Arc::new(RwLock::new(provider)) as Arc<RwLock<dyn AnisetteProvider + Send + Sync>>);
 
-        let mut account = AppleAccount::new(&apple_id, anisette_generator, false, None)
+        let mut account = AppleAccount::new(&apple_id, anisette_generator)
             .await
             .map_err(|e| LoginError::Failed {
                 reason: e.to_string(),
             })?;
 
         account
-            .login(&password, move |_params| {
-                let handler = handler.clone();
-                async move {
-                    Ok(match handler.on_two_factor_required().await {
-                        TwoFactorResponse::SubmitCode { code } => {
-                            TwoFactorCallbackResponse::SubmitCode(code)
-                        }
-                        TwoFactorResponse::ResendCode => TwoFactorCallbackResponse::ResendCode,
-                        TwoFactorResponse::Abort => TwoFactorCallbackResponse::Abort,
-                    })
-                }
-            })
+            .login(&password, Box::new(|_params| {
+                TwoFactorCallbackResponse::Abort
+            }))
             .await
             .map_err(|e| LoginError::Failed {
                 reason: e.to_string(),
